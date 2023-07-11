@@ -1,5 +1,6 @@
 package ru.netology.statsview.ui
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -7,6 +8,7 @@ import android.graphics.PointF
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
+import android.view.animation.LinearInterpolator
 import androidx.core.content.withStyledAttributes
 import ru.netology.nmedia.util.AndroidUtils
 import ru.netology.statsview.R
@@ -24,12 +26,15 @@ class StatsView @JvmOverloads constructor(
     defStyleAttr,
     defStyleRes,
 ) {
+
     var data: List<Float> = emptyList()
         set(value) {
             field = value
-            invalidate()
+            update()
         }
+
     var maxData: Float = 0F
+    var sumToDraw = 0F
 
     private var radius = 0F
     private var center = PointF(0F, 0F)
@@ -39,6 +44,11 @@ class StatsView @JvmOverloads constructor(
     private var fontSize = AndroidUtils.dp(context, 40F).toFloat()
     private var colors = emptyList<Int>()
     private var colorBack = 0
+
+    private var progress = 0F
+    private var valueAnimator: ValueAnimator? = null
+
+    var animationType = 0
 
     init {
         context.withStyledAttributes(attributeSet, R.styleable.StatsView) {
@@ -51,6 +61,7 @@ class StatsView @JvmOverloads constructor(
                 getColor(R.styleable.StatsView_color4, randomColor())
             )
             colorBack = getColor(R.styleable.StatsView_color_back, randomColor())
+            animationType = getInteger(R.styleable.StatsView_animationType, 0)
         }
     }
 
@@ -80,17 +91,54 @@ class StatsView @JvmOverloads constructor(
         if (data.isEmpty()) {
             return
         }
-//        val sumValues = data.sum()
-        var sumToDraw = 0F
-        var startFrom = -90F
-        var patchColor = 0
-        var patchAngle = 0F
 
         paint.color = colorBack
         canvas.drawCircle(center.x, center.y, radius, paint)
 
+        when(animationType) {
+            0 -> fillSame(canvas)
+            1 -> fillRotate(canvas)
+            2 -> fillSequential(canvas)
+            3 -> fillBidirectional(canvas)
+        }
+
+        canvas.drawText(
+            "%.2f%%".format(sumToDraw * progress * 100),
+            center.x,
+            center.y + textPaint.textSize / 4,
+            textPaint,
+        )
+    }
+
+    private fun randomColor() = Random.nextInt(0xFF000000.toInt(), 0xFFFFFFFF.toInt())
+
+    private fun update() {
+        valueAnimator?.let {
+            it.removeAllListeners()
+            it.cancel()
+        }
+        progress = 0F
+
+        valueAnimator = ValueAnimator.ofFloat(0F, 1F).apply {
+            addUpdateListener { anim ->
+                progress = anim.animatedValue as Float
+                invalidate()
+            }
+            duration = 2_000
+            interpolator = LinearInterpolator()
+        }.also {
+            it.start()
+        }
+    }
+
+    private fun fillSame(canvas: Canvas) {
+
+        sumToDraw = 0F
+        var startFrom = -90F
+        var patchColor = 0
+        var patchAngle = 0F
+
         for ((index, value) in data.withIndex()) {
-//            val arc = value / sumValues
             val arc = value / maxData
             sumToDraw += arc
             val angle = 360F * arc
@@ -99,7 +147,7 @@ class StatsView @JvmOverloads constructor(
                 patchColor = paint.color
                 patchAngle = angle
             }
-            canvas.drawArc(oval, startFrom, angle, false, paint)
+            canvas.drawArc(oval, startFrom, angle * progress, false, paint)
             startFrom += angle
         }
 
@@ -107,16 +155,86 @@ class StatsView @JvmOverloads constructor(
             paint.color = patchColor
             canvas.drawArc(oval, startFrom, patchAngle / 100, false, paint)
         }
-
-
-        canvas.drawText(
-            "%.2f%%".format(sumToDraw * 100),
-            center.x,
-            center.y + textPaint.textSize / 4,
-            textPaint,
-        )
     }
 
-    private fun randomColor() = Random.nextInt(0xFF000000.toInt(), 0xFFFFFFFF.toInt())
+    private fun fillRotate(canvas: Canvas) {
+        sumToDraw = 0F
+        var startFrom = -90F + progress * 360
+        var patchColor = 0
+        var patchAngle = 0F
+
+        for ((index, value) in data.withIndex()) {
+            val arc = value / maxData
+            sumToDraw += arc
+            val angle = 360F * arc
+            paint.color = colors.getOrNull(index) ?: randomColor()
+            if(index == 0) {
+                patchColor = paint.color
+                patchAngle = angle
+            }
+            canvas.drawArc(oval, startFrom, angle * progress, false, paint)
+            startFrom += angle
+        }
+
+        if(startFrom == 270F) {
+            paint.color = patchColor
+            canvas.drawArc(oval, startFrom, patchAngle / 100, false, paint)
+        }
+    }
+
+    private fun fillSequential(canvas: Canvas) {
+        sumToDraw = 0F
+        var startFrom = -90F
+        val maxAngle = startFrom + 360 * progress
+        var patchColor = 0
+        var patchAngle = 0F
+
+        for ((index, value) in data.withIndex()) {
+            if (startFrom > maxAngle) return
+            val arc = value / maxData
+            sumToDraw += arc
+            val angle = arc * 360F
+            val sweepTo = min(angle, maxAngle - startFrom)
+            paint.color = colors.getOrNull(index) ?: randomColor()
+            if(index == 0) {
+                patchColor = paint.color
+                patchAngle = angle
+            }
+
+            canvas.drawArc(oval, startFrom, sweepTo, false, paint)
+            startFrom += angle
+        }
+
+        if(startFrom == 270F) {
+            paint.color = patchColor
+            canvas.drawArc(oval, startFrom, patchAngle / 100, false, paint)
+        }
+    }
+
+    private fun fillBidirectional(canvas: Canvas) {
+
+        sumToDraw = 0F
+        var startFrom = -90F
+        var patchColor = 0
+        var patchAngle = 0F
+
+        for ((index, value) in data.withIndex()) {
+            val arc = value / maxData
+            sumToDraw += arc
+            val angle = 360F * arc
+            paint.color = colors.getOrNull(index) ?: randomColor()
+            if(index == 0) {
+                patchColor = paint.color
+                patchAngle = angle
+            }
+            canvas.drawArc(oval, startFrom + (angle / 2) - (angle * progress / 2), angle * progress, false, paint)
+            startFrom += angle
+        }
+
+        if(startFrom == 270F) {
+            paint.color = patchColor
+            canvas.drawArc(oval, startFrom, patchAngle / 100, false, paint)
+        }
+    }
 
 }
